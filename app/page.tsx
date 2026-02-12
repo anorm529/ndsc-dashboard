@@ -89,6 +89,13 @@ function venueBadge(v: any) {
   return { label: String(v ?? "Venue"), icon: "📍" };
 }
 
+function mapsUrl(lat?: any, lng?: any) {
+  const la = Number(lat);
+  const ln = Number(lng);
+  if (!Number.isFinite(la) || !Number.isFinite(ln)) return null;
+  return `https://www.google.com/maps?q=${la},${ln}`;
+}
+
 export default function Home() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -312,6 +319,24 @@ export default function Home() {
                             {view.featuredMatch.Notes}
                           </div>
                         ) : null}
+                        {(() => {
+                          const url = mapsUrl(view.featuredMatch.Lat, view.featuredMatch.Lng);
+                          if (!url) return null;
+
+                          return (
+                            <div className="mt-4">
+                              <a
+                                href={url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex items-center gap-2 text-xs px-3 py-2 rounded-xl border"
+                                style={{ borderColor: `${TEAL}55`, background: `${TEAL}12` }}
+                              >
+                                📍 Directions
+                              </a>
+                            </div>
+                          );
+                        })()}
                       </div>
 
                       <div className="shrink-0 text-right">
@@ -368,6 +393,7 @@ export default function Home() {
                   {(view.upcomingFixtures ?? []).slice(0, 8).map((f, i) => {
                     const cd = countdownLabel(f.date);
                     const vb = venueBadge(f.Venue);
+                    const url = mapsUrl(f.Lat, f.Lng);
                     return (
                       <div
                         key={i}
@@ -383,12 +409,26 @@ export default function Home() {
                               {formatDateTimeUK(f.date)} · {vb.icon} {vb.label} · {f.League}
                             </div>
                           </div>
-                          <div
-                            className="text-[11px] px-2 py-1 rounded-full border whitespace-nowrap"
-                            style={{ borderColor: `${TEAL}33`, background: "rgba(255,255,255,0.06)" }}
-                            title="Time until match"
-                          >
-                            {cd ? `${cd}` : "—"}
+                          <div className="flex flex-col items-end gap-2 shrink-0">
+                            <div
+                              className="text-[11px] px-2 py-1 rounded-full border whitespace-nowrap"
+                              style={{ borderColor: `${TEAL}33`, background: "rgba(255,255,255,0.06)" }}
+                              title="Time until match"
+                            >
+                              {cd ? `${cd}` : "—"}
+                            </div>
+
+                            {url && (
+                              <a
+                                href={url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-[11px] px-2 py-1 rounded-full border whitespace-nowrap"
+                                style={{ borderColor: `${TEAL}33`, background: `${TEAL}12` }}
+                              >
+                                📍 Map
+                              </a>
+                            )}
                           </div>
                         </div>
                       </div>

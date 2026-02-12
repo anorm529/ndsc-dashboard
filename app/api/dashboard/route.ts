@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server";
 
-export const runtime = "nodejs"; // safest on Vercel
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 export async function GET() {
-  const url = process.env.APPS_SCRIPT_URL;
+  const base = process.env.APPS_SCRIPT_URL;
 
-  if (!url) {
+  if (!base) {
     return NextResponse.json(
       { error: "Missing APPS_SCRIPT_URL env var" },
       { status: 500 }
@@ -13,14 +15,15 @@ export async function GET() {
   }
 
   try {
-    const upstream = await fetch(url, {
-      // This makes Vercel cache for 60 seconds, then refresh
-      next: { revalidate: 60 },
-    });
+    // cache-bust so nothing (browser/CDN/Google) serves stale data
+    const url = `${base}?t=${Date.now()}`;
+
+    const upstream = await fetch(url, { cache: "no-store" });
 
     if (!upstream.ok) {
+      const text = await upstream.text().catch(() => "");
       return NextResponse.json(
-        { error: `Apps Script returned ${upstream.status}` },
+        { error: `Apps Script returned ${upstream.status}`, details: text.slice(0, 200) },
         { status: 502 }
       );
     }
@@ -29,8 +32,9 @@ export async function GET() {
 
     return NextResponse.json(data, {
       headers: {
-        // Helps browsers + CDNs behave nicely
-        "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300",
+        "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+        Pragma: "no-cache",
+        Expires: "0",
       },
     });
   } catch (err: any) {

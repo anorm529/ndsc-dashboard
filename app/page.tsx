@@ -11,7 +11,18 @@ type DashboardData = {
 };
 
 const TEAL = "#12d6c5"; // NDSC accent
-const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+const ONE_MIN_MS = 60_000;
+const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+
+function toMs(value: any) {
+  const t = new Date(value).getTime();
+  return Number.isFinite(t) ? t : null;
+}
+
+function safeNum(v: any) {
+  const n = typeof v === "string" ? Number(v) : v;
+  return Number.isFinite(n) ? n : null;
+}
 
 function formatDateTimeUK(value: any) {
   const d = new Date(value);
@@ -36,27 +47,13 @@ function formatDateUK(value: any) {
   });
 }
 
-function safeNum(v: any) {
-  const n = typeof v === "string" ? Number(v) : v;
-  return Number.isFinite(n) ? n : null;
-}
-
-function toMs(value: any) {
-  const t = new Date(value).getTime();
-  return Number.isFinite(t) ? t : null;
-}
-
 // Always "Xd Xh Xm" (no seconds)
 function countdownLabel(targetISO: any) {
   const t = toMs(targetISO);
   if (t == null) return null;
 
   const diff = t - Date.now();
-
-  // within last 24h -> played
-  if (diff <= 0 && Math.abs(diff) <= ONE_DAY_MS) return "Played";
-  // older than 24h -> we’ll drop it (handled elsewhere)
-  if (diff <= 0) return null;
+  if (diff <= 0) return null; // past games excluded
 
   const totalMinutes = Math.floor(diff / 60000);
   const days = Math.floor(totalMinutes / (24 * 60));
@@ -66,13 +63,39 @@ function countdownLabel(targetISO: any) {
   return `${days}d ${hours}h ${mins}m`;
 }
 
+// Progress bar: fills up as the match approaches within a 7-day window.
+// - If match is >7 days away: small fill (5%)
+// - If match is now: 100%
+function matchProgress(targetISO: any) {
+  const t = toMs(targetISO);
+  if (t == null) return 0;
+
+  const diff = t - Date.now();
+  if (diff <= 0) return 100;
+
+  // 7-day window
+  const clamped = Math.min(Math.max(diff, 0), SEVEN_DAYS_MS);
+  const p = 1 - clamped / SEVEN_DAYS_MS;
+
+  // keep it visible even if > 7 days away
+  const visible = diff > SEVEN_DAYS_MS ? 0.05 : p;
+  return Math.round(visible * 100);
+}
+
+function venueBadge(v: any) {
+  const s = String(v ?? "").toLowerCase();
+  if (s.includes("home")) return { label: "Home", icon: "🏠" };
+  if (s.includes("away")) return { label: "Away", icon: "✈️" };
+  return { label: String(v ?? "Venue"), icon: "📍" };
+}
+
 export default function Home() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
 
-  // for live countdown updates
+  // tick for countdown + progress refresh
   const [, setTick] = useState(0);
 
   async function load() {
@@ -102,36 +125,27 @@ export default function Home() {
 
   useEffect(() => {
     load();
-    const id = setInterval(load, 60_000);
+    const id = setInterval(load, ONE_MIN_MS);
     return () => clearInterval(id);
   }, []);
 
-  // 1-minute tick is enough now (since we’re not showing seconds)
   useEffect(() => {
-    const id = setInterval(() => setTick((t) => t + 1), 60_000);
+    const id = setInterval(() => setTick((t) => t + 1), ONE_MIN_MS);
     return () => clearInterval(id);
   }, []);
 
   const view = useMemo(() => {
     if (!data) return null;
 
-    // Sort fixtures by date
-    const sortedFixtures = [...(data.nextFixture ?? [])].sort((a, b) => {
-      const da = toMs(a?.date) ?? 9e15;
-      const db = toMs(b?.date) ?? 9e15;
-      return da - db;
-    });
-
-    // Filter:
-    // - Drop if more than 24h in past
-    // - Keep if upcoming or within last 24h (marked as Played)
     const now = Date.now();
-    const nextFixture = sortedFixtures.filter((f) => {
-      const t = toMs(f?.date);
-      if (t == null) return false;
-      if (t < now - ONE_DAY_MS) return false; // drop off
-      return true;
-    });
+
+    // UPCOMING FIXTURES ONLY (strict)
+    const upcomingFixtures = [...(data.nextFixture ?? [])]
+      .map((f) => ({ ...f, __ms: toMs(f?.date) }))
+      .filter((f) => f.__ms != null && f.__ms > now)
+      .sort((a, b) => (a.__ms as number) - (b.__ms as number));
+
+    const featuredMatch = upcomingFixtures[0] ?? null;
 
     const leagueTable = [...(data.leagueTable ?? [])].sort((a, b) => {
       const pa = safeNum(a?.position) ?? 9e9;
@@ -157,20 +171,26 @@ export default function Home() {
       return hb - ha;
     });
 
-    // Primary fixture = first upcoming fixture (not played)
-    const primaryFixture =
-      nextFixture.find((f) => {
-        const t = toMs(f?.date);
-        return t != null && t > now;
-      }) ?? null;
+    return {
+      featuredMatch,
+      upcomingFixtures,
+      leagueTable,
+      topHitters,
+      recentResults,
+      homeRunLeaders,
+    };
+  }, [data]);
 
-    return { nextFixture, primaryFixture, leagueTable, topHitters, recentResults, homeRunLeaders };
-  }, [data, /* tick */]);
-
-  const primaryCountdown = useMemo(() => {
-    const iso = view?.primaryFixture?.date;
+  const featuredCountdown = useMemo(() => {
+    const iso = view?.featuredMatch?.date;
     if (!iso) return null;
     return countdownLabel(iso);
+  }, [view]);
+
+  const featuredProgress = useMemo(() => {
+    const iso = view?.featuredMatch?.date;
+    if (!iso) return 0;
+    return matchProgress(iso);
   }, [view]);
 
   return (
@@ -213,102 +233,41 @@ export default function Home() {
 
         {!view ? null : (
           <>
-            {/* Next Fixture */}
-            <section
-              className="rounded-3xl p-6 mb-6 border"
-              style={{
-                borderColor: `${TEAL}33`,
-                background: "rgba(255,255,255,0.04)",
-                boxShadow: `0 0 0 1px rgba(255,255,255,0.04), 0 0 40px rgba(18,214,197,0.10)`,
-              }}
-            >
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4">
-                <div className="flex items-center gap-3">
-                  <div
-                    className="h-3 w-3 rounded-full"
-                    style={{ backgroundColor: TEAL, boxShadow: `0 0 20px ${TEAL}` }}
-                  />
-                  <h2 className="text-xl font-semibold">Next Fixture</h2>
-                </div>
+            {/* FEATURED MATCH + FIXTURES LIST */}
+            <section className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+              {/* Featured Match Card */}
+              <div
+                className="lg:col-span-2 rounded-3xl p-6 border"
+                style={{
+                  borderColor: `${TEAL}33`,
+                  background: "rgba(255,255,255,0.04)",
+                  boxShadow: `0 0 0 1px rgba(255,255,255,0.04), 0 0 40px rgba(18,214,197,0.10)`,
+                }}
+              >
+                <div className="flex items-center justify-between gap-4 mb-5">
+                  <div className="flex items-center gap-3">
+                    <div
+                      className="h-3 w-3 rounded-full"
+                      style={{ backgroundColor: TEAL, boxShadow: `0 0 20px ${TEAL}` }}
+                    />
+                    <div>
+                      <h2 className="text-xl font-semibold">Match Card</h2>
+                      <p className="text-xs opacity-70">Closest upcoming fixture</p>
+                    </div>
+                  </div>
 
-                <div className="flex items-center gap-3">
                   <span
                     className="text-xs px-3 py-1 rounded-full border"
                     style={{
                       borderColor: `${TEAL}55`,
                       background: `${TEAL}1A`,
-                      color: "rgba(255,255,255,0.9)",
                     }}
                   >
                     Matchday
                   </span>
-
-                  {view.primaryFixture?.date && (
-                    <span
-                      className="text-xs px-3 py-1 rounded-full border"
-                      style={{
-                        borderColor: `${TEAL}55`,
-                        background: "rgba(255,255,255,0.06)",
-                      }}
-                      title="Time until next upcoming game"
-                    >
-                      ⏳ {primaryCountdown ?? "—"} away
-                    </span>
-                  )}
                 </div>
-              </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {(view.nextFixture?.length ? view.nextFixture : []).map((f, i) => {
-                  const t = toMs(f?.date);
-                  const now = Date.now();
-                  const isPlayed = t != null && t <= now; // within last 24h is kept; older is filtered out
-                  const status = isPlayed ? "Played" : countdownLabel(f.date);
-
-                  return (
-                    <div
-                      key={i}
-                      className="rounded-2xl p-5 border min-h-[160px] flex flex-col justify-between"
-                      style={{
-                        borderColor: `${TEAL}22`,
-                        background: "rgba(255,255,255,0.04)",
-                      }}
-                    >
-                      <div>
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="text-lg font-bold">{f.Team}</div>
-
-                          <span
-                            className="text-xs px-3 py-1 rounded-full border whitespace-nowrap"
-                            style={{
-                              borderColor: isPlayed ? "rgba(255,255,255,0.18)" : `${TEAL}55`,
-                              background: isPlayed ? "rgba(255,255,255,0.06)" : `${TEAL}12`,
-                              color: "rgba(255,255,255,0.9)",
-                            }}
-                            title={isPlayed ? "This fixture has passed (kept for 24 hours)" : "Time until game"}
-                          >
-                            {isPlayed ? "Played" : `${status} away`}
-                          </span>
-                        </div>
-
-                        <div className="opacity-90">vs {f.Opponent}</div>
-                        <div className="text-sm opacity-70 mt-2">
-                          {formatDateTimeUK(f.date)} · {f.Venue} · {f.League}
-                        </div>
-                      </div>
-
-                      {f.Notes ? (
-                        <div className="text-sm mt-3" style={{ color: "rgba(255,255,255,0.82)" }}>
-                          {f.Notes}
-                        </div>
-                      ) : (
-                        <div />
-                      )}
-                    </div>
-                  );
-                })}
-
-                {(!view.nextFixture || view.nextFixture.length === 0) && (
+                {!view.featuredMatch ? (
                   <div
                     className="rounded-2xl p-5 border"
                     style={{
@@ -318,15 +277,140 @@ export default function Home() {
                   >
                     <div className="font-semibold">No upcoming fixtures</div>
                     <div className="text-sm opacity-70 mt-1">
-                      Add your next matches in the <code className="opacity-90">Next_Fixture</code> sheet.
+                      Add matches in the <code className="opacity-90">Next_Fixture</code> sheet.
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-2xl p-5 border" style={{ borderColor: `${TEAL}22`, background: "rgba(255,255,255,0.04)" }}>
+                    <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+                      <div className="min-w-0">
+                        <div className="text-2xl font-bold leading-tight truncate">
+                          {view.featuredMatch.Team} <span className="opacity-70">vs</span>{" "}
+                          {view.featuredMatch.Opponent}
+                        </div>
+
+                        <div className="mt-2 text-sm opacity-80">
+                          {formatDateTimeUK(view.featuredMatch.date)} · {view.featuredMatch.League}
+                        </div>
+
+                        <div className="mt-2 text-sm opacity-80 flex items-center gap-2">
+                          {(() => {
+                            const vb = venueBadge(view.featuredMatch.Venue);
+                            return (
+                              <>
+                                <span>{vb.icon}</span>
+                                <span className="opacity-90">{vb.label}</span>
+                                <span className="opacity-60">·</span>
+                                <span className="opacity-90">{String(view.featuredMatch.Venue ?? "").replace(/home|away/i, "").trim() || "—"}</span>
+                              </>
+                            );
+                          })()}
+                        </div>
+
+                        {view.featuredMatch.Notes ? (
+                          <div className="mt-3 text-sm" style={{ color: "rgba(255,255,255,0.82)" }}>
+                            {view.featuredMatch.Notes}
+                          </div>
+                        ) : null}
+                      </div>
+
+                      <div className="shrink-0 text-right">
+                        <div
+                          className="inline-flex items-center gap-2 text-xs px-3 py-1 rounded-full border"
+                          style={{
+                            borderColor: `${TEAL}55`,
+                            background: "rgba(255,255,255,0.06)",
+                          }}
+                          title="Time until match"
+                        >
+                          ⏳ {featuredCountdown ?? "—"} away
+                        </div>
+
+                        <div className="mt-4">
+                          <div className="text-xs opacity-70 mb-2">Countdown Progress</div>
+                          <div className="w-56 max-w-full h-3 rounded-full overflow-hidden border"
+                               style={{ borderColor: "rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.05)" }}>
+                            <div
+                              className="h-full"
+                              style={{
+                                width: `${featuredProgress}%`,
+                                background: `linear-gradient(90deg, ${TEAL}, rgba(18,214,197,0.35))`,
+                              }}
+                            />
+                          </div>
+                          <div className="text-[11px] opacity-60 mt-2">
+                            {featuredProgress}% (fills as match approaches)
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 )}
               </div>
+
+              {/* Fixtures List */}
+              <div
+                className="rounded-3xl p-6 border"
+                style={{ borderColor: `${TEAL}22`, background: "rgba(255,255,255,0.04)" }}
+              >
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-xl font-semibold">Fixtures</h2>
+                  <span
+                    className="text-xs px-2 py-1 rounded-full border"
+                    style={{ borderColor: `${TEAL}33`, background: `${TEAL}12` }}
+                    title="Upcoming fixtures only"
+                  >
+                    Upcoming
+                  </span>
+                </div>
+
+                <div className="space-y-3">
+                  {(view.upcomingFixtures ?? []).slice(0, 8).map((f, i) => {
+                    const cd = countdownLabel(f.date);
+                    const vb = venueBadge(f.Venue);
+                    return (
+                      <div
+                        key={i}
+                        className="rounded-2xl p-4 border"
+                        style={{ borderColor: "rgba(255,255,255,0.10)", background: "rgba(255,255,255,0.04)" }}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="font-semibold truncate">
+                              {f.Team} <span className="opacity-70">vs</span> {f.Opponent}
+                            </div>
+                            <div className="text-xs opacity-70 mt-1">
+                              {formatDateTimeUK(f.date)} · {vb.icon} {vb.label} · {f.League}
+                            </div>
+                          </div>
+                          <div
+                            className="text-[11px] px-2 py-1 rounded-full border whitespace-nowrap"
+                            style={{ borderColor: `${TEAL}33`, background: "rgba(255,255,255,0.06)" }}
+                            title="Time until match"
+                          >
+                            {cd ? `${cd}` : "—"}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {(!view.upcomingFixtures || view.upcomingFixtures.length === 0) && (
+                    <div className="text-sm opacity-70">
+                      No upcoming fixtures found.
+                    </div>
+                  )}
+
+                  {view.upcomingFixtures?.length > 8 && (
+                    <div className="text-xs opacity-60 pt-1">
+                      Showing 8 of {view.upcomingFixtures.length}.
+                    </div>
+                  )}
+                </div>
+              </div>
             </section>
 
-            {/* The rest of your cards can stay exactly as before (league/hitters/results/hr).
-               If you want, I can paste the full grid section again with teal accents included. */}
+            {/* REST OF DASHBOARD */}
             <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               {/* League Table */}
               <div
@@ -339,7 +423,10 @@ export default function Home() {
                     <div
                       key={i}
                       className="flex items-center gap-4 p-4 rounded-2xl border"
-                      style={{ borderColor: "rgba(255,255,255,0.10)", background: "rgba(255,255,255,0.04)" }}
+                      style={{
+                        borderColor: "rgba(255,255,255,0.10)",
+                        background: "rgba(255,255,255,0.04)",
+                      }}
                     >
                       <div
                         className="w-10 h-10 rounded-xl flex items-center justify-center font-bold"
@@ -349,7 +436,9 @@ export default function Home() {
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="font-semibold truncate">{r.team}</div>
-                        <div className="text-xs opacity-70">P {r.played} · W {r.wins} · L {r.losses}</div>
+                        <div className="text-xs opacity-70">
+                          P {r.played} · W {r.wins} · L {r.losses}
+                        </div>
                       </div>
                       <div className="text-sm opacity-85 whitespace-nowrap">
                         {r.wins}-{r.losses} ({r.points} pts)
@@ -370,11 +459,17 @@ export default function Home() {
                     <div
                       key={i}
                       className="rounded-2xl p-5 border min-h-[150px]"
-                      style={{ borderColor: "rgba(255,255,255,0.10)", background: "rgba(255,255,255,0.04)" }}
+                      style={{
+                        borderColor: "rgba(255,255,255,0.10)",
+                        background: "rgba(255,255,255,0.04)",
+                      }}
                     >
                       <div className="flex items-center justify-between">
                         <div className="font-bold">{p.player}</div>
-                        <div className="text-xs px-2 py-1 rounded-full border" style={{ borderColor: `${TEAL}33`, background: `${TEAL}12` }}>
+                        <div
+                          className="text-xs px-2 py-1 rounded-full border"
+                          style={{ borderColor: `${TEAL}33`, background: `${TEAL}12` }}
+                        >
                           #{i + 1}
                         </div>
                       </div>
@@ -383,11 +478,15 @@ export default function Home() {
                       <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
                         <div>
                           <div className="text-xs opacity-60">AVG</div>
-                          <div className="font-semibold">{p.avg != null ? Number(p.avg).toFixed(3) : "—"}</div>
+                          <div className="font-semibold">
+                            {p.avg != null ? Number(p.avg).toFixed(3) : "—"}
+                          </div>
                         </div>
                         <div>
                           <div className="text-xs opacity-60">OBP</div>
-                          <div className="font-semibold">{p.obp != null ? Number(p.obp).toFixed(3) : "—"}</div>
+                          <div className="font-semibold">
+                            {p.obp != null ? Number(p.obp).toFixed(3) : "—"}
+                          </div>
                         </div>
                         <div>
                           <div className="text-xs opacity-60">RBIs</div>
@@ -423,17 +522,24 @@ export default function Home() {
                       <div
                         key={i}
                         className="rounded-2xl p-5 flex items-center justify-between gap-4 border"
-                        style={{ borderColor: "rgba(255,255,255,0.10)", background: "rgba(255,255,255,0.04)" }}
+                        style={{
+                          borderColor: "rgba(255,255,255,0.10)",
+                          background: "rgba(255,255,255,0.04)",
+                        }}
                       >
                         <div className="min-w-0">
-                          <div className="font-semibold truncate">{m.Team} vs {m.Opponent}</div>
+                          <div className="font-semibold truncate">
+                            {m.Team} vs {m.Opponent}
+                          </div>
                           <div className="text-xs opacity-70">{formatDateUK(m.Date)}</div>
                         </div>
                         <div className="flex items-center gap-3">
                           <div className="text-sm opacity-80 whitespace-nowrap">
                             {m["NDSC Score"]}-{m["Opponent Score"]}
                           </div>
-                          <div className={`text-xs px-2 py-1 rounded-full border ${badge}`}>{res || "—"}</div>
+                          <div className={`text-xs px-2 py-1 rounded-full border ${badge}`}>
+                            {res || "—"}
+                          </div>
                         </div>
                       </div>
                     );
@@ -452,7 +558,10 @@ export default function Home() {
                     <div
                       key={i}
                       className="rounded-2xl p-5 flex items-center justify-between gap-4 border"
-                      style={{ borderColor: "rgba(255,255,255,0.10)", background: "rgba(255,255,255,0.04)" }}
+                      style={{
+                        borderColor: "rgba(255,255,255,0.10)",
+                        background: "rgba(255,255,255,0.04)",
+                      }}
                     >
                       <div className="min-w-0">
                         <div className="font-semibold truncate">{hr.Player}</div>
@@ -471,7 +580,7 @@ export default function Home() {
             </section>
 
             <footer className="mt-10 text-xs opacity-60">
-              Auto-refreshes every 60 seconds · Fixtures drop off 24h after start time
+              Auto-refreshes every 60 seconds · Past fixtures are excluded automatically
             </footer>
           </>
         )}

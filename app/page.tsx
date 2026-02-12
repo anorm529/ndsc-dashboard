@@ -178,7 +178,7 @@ export default function Home() {
       <div className="max-w-6xl mx-auto px-5 sm:px-8 py-8">
         <header className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-5 mb-8">
           <div>
-            <h1 className="text-3xl sm:text-4xl font-bold">North Down Softball Club</h1>
+            <h1 className="text-3xl sm:text-4xl font-bold">NDSC Barracudas</h1>
             <p className="text-sm opacity-70">Matchday Dashboard</p>
           </div>
 

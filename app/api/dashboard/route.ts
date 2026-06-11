@@ -1,15 +1,35 @@
 import { NextResponse } from "next/server";
+import { dashboardFromNeon } from "@/src/lib/admin-db";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 export async function GET() {
+  if (process.env.DATABASE_URL || process.env.NEON_DATABASE_URL) {
+    try {
+      return NextResponse.json(await dashboardFromNeon(), {
+        headers: {
+          "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+          Pragma: "no-cache",
+          Expires: "0",
+        },
+      });
+    } catch (error) {
+      if (!process.env.APPS_SCRIPT_URL) {
+        return NextResponse.json(
+          { error: error instanceof Error ? error.message : "Neon dashboard query failed" },
+          { status: 500 }
+        );
+      }
+    }
+  }
+
   const base = process.env.APPS_SCRIPT_URL;
 
   if (!base) {
     return NextResponse.json(
-      { error: "Missing APPS_SCRIPT_URL env var" },
+      { error: "Missing DATABASE_URL env var" },
       { status: 500 }
     );
   }
